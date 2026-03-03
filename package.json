@@ -1,0 +1,43 @@
+{
+  "name": "koishi-plugin-latex-render",
+  "description": "将 AI 返回的 LaTeX 公式渲染为图片",
+  "version": "1.0.0",
+  "main": "lib/index.js",
+  "typings": "lib/index.d.ts",
+  "files": [
+    "lib",
+    "dist"
+  ],
+  "license": "MIT",
+  "homepage": "https://github.com/gt4404gb/koishi-plugin-latex-render",
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/gt4404gb/koishi-plugin-latex-render.git"
+  },
+  "keywords": [
+    "koishi",
+    "plugin",
+    "latex",
+    "chatluna",
+    "ai"
+  ],
+  "dependencies": {
+    "@resvg/resvg-js": "^2.6.0",
+    "katex": "^0.16.0",
+    "satori": "^0.10.0"
+  },
+  "peerDependencies": {
+    "koishi": "^4.18.7"
+  },
+  "koishi": {
+    "description": {
+      "zh": "将 AI 返回的 LaTeX 公式渲染为图片",
+      "en": "Render LaTeX formulas returned by AI as images"
+    },
+    "service": {
+      "optional": [
+        "assets"
+      ]
+    }
+  }
+}
