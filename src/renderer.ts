@@ -1,7 +1,5 @@
+// @ts-ignore - katex is available in parent workspace
 import katex from 'katex'
-import satori from 'satori'
-import { Resvg } from '@resvg/resvg-js'
-import { readFile } from 'fs/promises'
 import { Context } from 'koishi'
 
 interface Config {
@@ -10,62 +8,42 @@ interface Config {
   textColor?: string
 }
 
-// 字体缓存
-let fontData: ArrayBuffer | null = null
+/**
+ * 检测是否为 LaTeX 公式（增强版）
+ */
+export function containsLatex(content: string): boolean {
+  // 匹配各种 LaTeX 格式
+  return /\$\$/ .test(content) || /\\begin\{/.test(content) || /\\\[[\s\S]*?\\\]/.test(content) || /\\\([\s\S]*?\\\)/.test(content) || /\$[^\$\n]/.test(content)
+}
 
 /**
- * 加载字体数据
+ * 解码 HTML 实体
  */
-async function loadFont(): Promise<ArrayBuffer> {
-  if (fontData) return fontData
-
-  try {
-    // 尝试加载系统字体
-    const fontPaths = [
-      // Windows
-      'C:/Windows/Fonts/msyh.ttc',   // 微软雅黑
-      'C:/Windows/Fonts/simhei.ttf', // 黑体
-      'C:/Windows/Fonts/simsun.ttc', // 宋体
-      // macOS
-      '/System/Library/Fonts/PingFang.ttc',
-      '/System/Library/Fonts/STHeiti Light.ttc',
-      // Linux
-      '/usr/share/fonts/truetype/droid/DroidSansFallbackFull.ttf',
-      '/usr/share/fonts/noto-cjk/NotoSansCJK-Regular.ttc',
-    ]
-
-    for (const fontPath of fontPaths) {
-      try {
-        const buffer = await readFile(fontPath)
-        fontData = buffer.buffer.slice(buffer.byteOffset, buffer.byteOffset + buffer.byteLength)
-        return fontData
-      } catch {
-        continue
-      }
-    }
-
-    throw new Error('No font found')
-  } catch (error) {
-    // 如果找不到字体，创建一个简单的位图字体
-    throw error
-  }
+function decodeHtmlEntities(text: string): string {
+  return text
+    .replace(/&lt;/g, '<')
+    .replace(/&gt;/g, '>')
+    .replace(/&amp;/g, '&')
+    .replace(/&quot;/g, '"')
+    .replace(/&#39;/g, "'")
+    .replace(/&nbsp;/g, ' ')
 }
 
 /**
  * 解析消息文本，提取 LaTeX 公式和普通文本
  */
 function parseMessage(content: string): Array<{ type: 'text' | 'latex'; content: string; display?: boolean }> {
+  content = decodeHtmlEntities(content)
+
   const result: Array<{ type: 'text' | 'latex'; content: string; display?: boolean }> = []
 
-  // 正则匹配 LaTeX 公式
-  // $$...$$ 是展示公式，$...$ 是行内公式
-  const regex = /(\$\$[\s\S]+?\$\$|\$[^\$\n]+?\$)/g
+  // 增强的正则：支持更多格式
+  const regex = /(\$\$[\s\S]+?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:[^\$\n]|\$(?!\$)|[\s\S])*?\$|\\begin\{[a-zA-Z*]+\}[\s\S]*?\\end\{[a-zA-Z*]+\})/g
 
   let lastIndex = 0
   let match
 
   while ((match = regex.exec(content)) !== null) {
-    // 添加普通文本
     if (match.index > lastIndex) {
       const text = content.slice(lastIndex, match.index).trim()
       if (text) {
@@ -73,10 +51,23 @@ function parseMessage(content: string): Array<{ type: 'text' | 'latex'; content:
       }
     }
 
-    // 添加 LaTeX 公式
     const latex = match[1]
-    const isDisplay = latex.startsWith('$$')
-    const formula = isDisplay ? latex.slice(2, -2) : latex.slice(1, -1)
+    let isDisplay = false
+    let formula = latex
+
+    if (latex.startsWith('$$') && latex.endsWith('$$')) {
+      isDisplay = true
+      formula = latex.slice(2, -2).trim()
+    } else if (latex.startsWith('\\[') && latex.endsWith('\\]')) {
+      isDisplay = true
+      formula = latex.slice(2, -2).trim()
+    } else if (latex.startsWith('\\(') && latex.endsWith('\\)')) {
+      formula = latex.slice(2, -2).trim()
+    } else if (latex.startsWith('$') && latex.endsWith('$')) {
+      formula = latex.slice(1, -1).trim()
+    } else if (latex.startsWith('\\begin')) {
+      isDisplay = true
+    }
 
     result.push({
       type: 'latex',
@@ -87,7 +78,6 @@ function parseMessage(content: string): Array<{ type: 'text' | 'latex'; content:
     lastIndex = match.index + match[0].length
   }
 
-  // 添加剩余的普通文本
   if (lastIndex < content.length) {
     const text = content.slice(lastIndex).trim()
     if (text) {
@@ -99,165 +89,218 @@ function parseMessage(content: string): Array<{ type: 'text' | 'latex'; content:
 }
 
 /**
- * 渲染 LaTeX 为 HTML
+ * 简化的 KaTeX 基础样式（回退用）
  */
-function renderLatexToHtml(formula: string, displayMode: boolean): string {
-  try {
-    return katex.renderToString(formula, {
-      throwOnError: false,
-      displayMode,
-      trust: true,
-      strict: false,
-    })
-  } catch (error) {
-    return `<span style="color:red">${formula}</span>`
-  }
-}
+const fallbackStyles = `
+.katex { font: normal 1.1em "KaTeX_Main", "Times New Roman", serif; line-height: 1.2; }
+.katex-display { display: block; margin: 1em 0; text-align: center; }
+.katex-display > .katex { display: block; text-align: center; }
+.katex .mord { color: inherit; }
+.katex .base { display: inline-block; }
+.katex .strut { display: inline-block; }
+.katex .mrel { margin-left: 0.2em; margin-right: 0.2em; }
+.katex .mbin { margin-left: 0.2em; margin-right: 0.2em; }
+.katex .mopen, .katex .mclose { margin-left: 0.1em; margin-right: 0.1em; }
+`
 
 /**
- * 生成 Satori 元素
+ * 生成 HTML（使用 KaTeX 渲染公式）
+ * 使用 CDN 加载 KaTeX CSS，设置更长超时
  */
-function generateSatoriElements(
+function generateHtml(
   parsed: Array<{ type: 'text' | 'latex'; content: string; display?: boolean }>,
   config: Config
-): any[] {
-  const elements: any[] = []
+): string {
   const textColor = config.textColor || '#333333'
+  const bgColor = config.backgroundColor || '#ffffff'
+  const width = config.width || 800
 
-  // 创建 HTML 容器来渲染混合内容
-  let htmlContent = ''
+  let html = `<!DOCTYPE html>
+<html>
+<head>
+  <meta charset="UTF-8">
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <style>
+    * { margin: 0; padding: 0; box-sizing: border-box; }
+    body {
+      font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
+      font-size: 16px;
+      line-height: 1.8;
+      color: ${textColor};
+      background-color: ${bgColor};
+      padding: 24px;
+      width: ${width}px;
+      min-height: 100px;
+    }
+    .content {
+      word-wrap: break-word;
+      white-space: pre-wrap;
+    }
+    .latex-display {
+      margin: 12px 0;
+      text-align: center;
+      overflow-x: auto;
+    }
+    .latex-inline {
+      margin: 0 2px;
+    }
+    .text-line {
+      margin: 4px 0;
+    }
+  </style>
+</head>
+<body>
+  <div class="content">`
 
   for (const item of parsed) {
     if (item.type === 'text') {
-      // 转义 HTML
+      // 处理普通文本
       const escaped = item.content
         .replace(/&/g, '&amp;')
         .replace(/</g, '&lt;')
         .replace(/>/g, '&gt;')
-        .replace(/\n/g, '<br>')
-      htmlContent += `<span>${escaped}</span>`
+      html += `<span class="text-line">${escaped}</span>`
     } else {
-      // 渲染 LaTeX
-      const html = renderLatexToHtml(item.content, item.display || false)
-      // KaTeX 输出包含外部样式表，需要内联样式
-      const styledHtml = html
-        .replace(/class="katex"/g, 'style="font-size:1.1em"')
-      htmlContent += `<span>${styledHtml}</span>`
+      // 处理 LaTeX 公式
+      try {
+        const htmlContent = katex.renderToString(item.content, {
+          throwOnError: false,
+          displayMode: item.display || false,
+          trust: true,
+          strict: false,
+        })
+        const className = item.display ? 'latex-display' : 'latex-inline'
+        html += `<span class="${className}">${htmlContent}</span>`
+      } catch (e) {
+        // 渲染失败时显示原文
+        html += `<span class="latex-display"><code>${item.content}</code></span>`
+      }
     }
   }
 
-  // 使用 HTML 元素
-  elements.push({
-    type: 'div',
-    props: {
-      style: {
-        display: 'flex',
-        flexDirection: 'column',
-        width: '100%',
-        padding: '20px',
-        backgroundColor: config.backgroundColor || '#ffffff',
-        fontSize: '16px',
-        lineHeight: '1.6',
-        color: textColor,
-        fontFamily: '"Microsoft YaHei", "PingFang SC", sans-serif',
-      },
-      children: [
-        {
-          type: 'div',
-          props: {
-            style: {
-              dangerouslySetInnerHTML: htmlContent,
-            },
-          },
-        },
-      ],
-    },
-  })
-
-  return elements
+  html += `</div></body></html>`
+  return html
 }
 
 /**
- * 计算内容高度
+ * 计算预估高度
  */
-function calculateHeight(parsed: Array<{ type: 'text' | 'latex'; content: string }>): number {
-  // 简单估算：每 50 个字符一行，加上公式的高度
+function estimateHeight(parsed: Array<{ type: 'text' | 'latex'; content: string }>): number {
   let charCount = 0
   for (const item of parsed) {
     if (item.type === 'text') {
       charCount += item.content.length
     } else {
-      charCount += 20 // 公式预估
+      charCount += item.content.length * 1.5
     }
   }
-
-  const lines = Math.ceil(charCount / 40)
-  return Math.max(60, lines * 28 + 40)
+  const lines = Math.ceil(charCount / 35)
+  return Math.max(100, lines * 24 + 48)
 }
 
 /**
- * 主渲染函数
+ * 主渲染函数 - 使用 Puppeteer + KaTeX
  */
 export async function renderLatex(
   ctx: Context,
   content: string,
   config: Config
 ): Promise<string> {
+  console.log('[latex-render] 开始渲染...')
+
   // 解析消息
-  const parsed = parseMessage(content)
+  let parsed: Array<{ type: 'text' | 'latex'; content: string; display?: boolean }>
+  try {
+    parsed = parseMessage(content)
+    console.log('[latex-render] 解析完成，共', parsed.length, '个片段')
+  } catch (error) {
+    console.error('[latex-render] 解析消息失败:', error)
+    throw new Error(`消息解析失败: ${error}`)
+  }
 
   if (parsed.length === 0) {
     throw new Error('No content to render')
   }
 
   const width = config.width || 800
-  const height = calculateHeight(parsed)
+  const height = estimateHeight(parsed)
 
-  // 加载字体
-  let font: ArrayBuffer
+  // 生成 HTML
+  let html: string
   try {
-    font = await loadFont()
-  } catch {
-    // 如果没有字体，使用默认处理
-    ctx.logger.warn('无法加载字体，将使用默认处理')
-    // 创建一个简单的 SVG 文本
-    const svg = `<svg xmlns="http://www.w3.org/2000/svg" width="${width}" height="${height}">
-      <rect width="100%" height="100%" fill="${config.backgroundColor || '#ffffff'}"/>
-      <text x="10" y="30" fill="${config.textColor || '#333333'}" font-size="16">${content}</text>
-    </svg>`
-
-    const resvg = new Resvg(svg)
-    const pngData = resvg.render()
-    const buffer = Buffer.from(pngData.asPng())
-
-    // 上传图片
-    const url = await (ctx as any).assets.upload(buffer, 'latex-render.png')
-    return url
+    html = generateHtml(parsed, config)
+    console.log('[latex-render] HTML 生成完成，长度:', html.length)
+  } catch (error) {
+    console.error('[latex-render] HTML 生成失败:', error)
+    throw new Error(`HTML 生成失败: ${error}`)
   }
 
-  // 生成 Satori 元素
-  const elements = generateSatoriElements(parsed, config)
+  // Puppeteer 截图
+  let page = null
+  try {
+    // 获取 Puppeteer 页面
+    page = await (ctx as any).puppeteer.page()
+    console.log('[latex-render] Puppeteer 页面获取成功')
 
-  // 使用 Satori 渲染为 SVG
-  const svg = await satori(elements, {
-    width,
-    height,
-    fonts: [
-      {
-        name: 'System',
-        data: font,
-        weight: 400,
-        style: 'normal',
+    // 设置 HTML 内容 - 使用 networkidle2 允许 CSS 加载
+    await page.setContent(html, {
+      waitUntil: 'networkidle2',
+      timeout: 30000,  // 30秒超时等待 CSS
+    })
+    console.log('[latex-render] HTML 内容设置完成')
+
+    // 等待一小段时间确保渲染完成
+    await new Promise(resolve => setTimeout(resolve, 500))
+
+    // 获取内容实际高度
+    const actualHeight = await page.evaluate(() => {
+      const body = document.body
+      return body ? body.scrollHeight : 0
+    }).catch((e) => {
+      console.warn('[latex-render] 获取高度失败，使用预估高度:', e)
+      return height
+    })
+
+    const finalHeight = Math.max(actualHeight + 20, height)
+    console.log('[latex-render] 实际高度:', finalHeight)
+
+    // 截图
+    const buffer = await page.screenshot({
+      clip: {
+        x: 0,
+        y: 0,
+        width: width,
+        height: finalHeight
       },
-    ],
-  })
+      type: 'png'
+    })
+    console.log('[latex-render] 截图完成，buffer 长度:', buffer.length)
 
-  // 使用 Resvg 渲染为 PNG
-  const resvg = new Resvg(svg)
-  const pngData = resvg.render()
-  const buffer = Buffer.from(pngData.asPng())
+    // 关闭页面
+    await page.close().catch(() => {})
+    page = null
 
-  // 上传图片
-  const url = await (ctx as any).assets.upload(buffer, 'latex-render.png')
-  return url
+    // 上传图片 - 使用 data URL
+    const base64 = Buffer.from(buffer).toString('base64')
+    const dataUrl = `data:image/png;base64,${base64}`
+    const url = await (ctx as any).assets.upload(dataUrl, 'latex-render.png')
+    console.log('[latex-render] 图片上传完成，URL:', url)
+
+    return url
+  } catch (error: any) {
+    console.error('[latex-render] Puppeteer 渲染失败:', error?.message || error)
+    console.error('[latex-render] 错误详情:', error?.stack || '无堆栈信息')
+
+    // 确保关闭页面
+    if (page) {
+      try {
+        await page.close()
+      } catch (e) {
+        // 忽略关闭错误
+      }
+    }
+
+    // 抛出具体错误
+    throw new Error(`LaTeX 渲染失败: ${error?.message || error}`)
+  }
 }

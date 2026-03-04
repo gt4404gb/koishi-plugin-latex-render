@@ -1,9 +1,9 @@
-import { Context, Schema, h, Element, Fragment } from 'koishi'
-import { renderLatex } from './renderer'
+import { Context, Schema, h } from 'koishi'
+import { renderLatex, containsLatex } from './renderer'
 
 export const name = 'latex-render'
 
-export const inject = ['assets']
+export const inject = ['assets', 'puppeteer']
 
 export interface Config {
   /** 图片宽度 */
@@ -12,56 +12,78 @@ export interface Config {
   backgroundColor?: string
   /** 文字颜色 */
   textColor?: string
+  /** 调试模式 */
+  debug?: boolean
 }
 
 export const Config: Schema<Config> = Schema.object({
   width: Schema.number().default(800).description('图片宽度'),
   backgroundColor: Schema.string().default('#ffffff').description('背景色'),
   textColor: Schema.string().default('#333333').description('文字颜色'),
+  debug: Schema.boolean().default(false).description('调试模式'),
 })
 
-/**
- * 将 Fragment 转换为字符串
- */
-function fragmentToString(fragment: Fragment): string {
-  if (typeof fragment === 'string') return fragment
-  if (Array.isArray(fragment)) {
-    return fragment.map(fragmentToString).join('')
-  }
-  // 使用 Element 的 toString 方法
-  return String(fragment)
-}
-
 export function apply(ctx: Context, config: Config) {
-  // 注册中间件，拦截所有消息
-  ctx.middleware(async (session, next) => {
-    const result = await next()
-    if (!result) return
+  const debug = config.debug || false
 
-    // 将结果转为字符串检测是否包含 LaTeX
-    const content = fragmentToString(result)
-
-    // 检测是否包含 LaTeX 公式 ($...$ 或 $$...$$)
-    if (!containsLatex(content)) {
-      return result
-    }
-
+  // 监听 chatluna/after-chat 事件
+  const handler = async (
+    conversationId: string,
+    sourceMessage: any,
+    displayResponse: any,
+    promptVariables: any,
+    chatInterface: any,
+    session: any
+  ) => {
     try {
-      // 渲染整条消息为图片
-      const imageUrl = await renderLatex(ctx, content, config)
-      return h.image(imageUrl)
-    } catch (error) {
-      // 如果渲染失败，返回原始消息
-      ctx.logger.warn('LaTeX 渲染失败:', error)
-      return result
-    }
-  })
-}
+      // 提取 content
+      let content: string | undefined
+      if (Array.isArray(displayResponse)) {
+        content = displayResponse[0]?.content
+      } else if (displayResponse?.content) {
+        content = displayResponse.content
+      } else if (typeof displayResponse === 'string') {
+        content = displayResponse
+      }
 
-/**
- * 检测字符串是否包含 LaTeX 公式
- */
-function containsLatex(content: string): boolean {
-  // 检测行内公式 $...$ 或块级公式 $$...$$
-  return /\$[^\$\n]+?\$/.test(content)
+      if (!content) return
+
+      const contentStr = typeof content === 'string' ? content : JSON.stringify(content)
+
+      if (containsLatex(contentStr)) {
+        // 检测到 LaTeX，输出日志
+        if (debug) {
+          console.log('[latex-render] 检测到 LaTeX 公式，开始渲染...')
+        }
+
+        try {
+          const imageUrl = await renderLatex(ctx, contentStr, config)
+
+          // 发送图片消息
+          if (session) {
+            await session.send(h.image(imageUrl))
+          }
+
+          // 替换消息内容
+          const imageContent = h.image(imageUrl).toString()
+          if (Array.isArray(displayResponse)) {
+            displayResponse[0].content = imageContent
+          } else {
+            displayResponse.content = imageContent
+          }
+        } catch (error) {
+          // 渲染失败时保留原始文本
+          if (debug) {
+            console.error('[latex-render] 渲染失败:', error)
+          }
+        }
+      }
+    } catch (error) {
+      if (debug) {
+        console.error('[latex-render] 处理失败:', error)
+      }
+    }
+  }
+
+  (ctx as any).on('chatluna/after-chat', handler)
 }
