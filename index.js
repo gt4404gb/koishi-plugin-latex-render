@@ -40,64 +40,182 @@ var import_koishi = require("koishi");
 
 // src/renderer.ts
 var import_katex = __toESM(require("katex"));
-function containsLatex(content) {
-  return /\$\$/.test(content) || /\\begin\{/.test(content) || /\\\[[\s\S]*?\\\]/.test(content) || /\\\([\s\S]*?\\\)/.test(content) || /\$[^\$\n]/.test(content);
-}
-__name(containsLatex, "containsLatex");
+var import_mhchem = require("katex/contrib/mhchem");
+var import_marked = require("marked");
 function decodeHtmlEntities(text) {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
 }
 __name(decodeHtmlEntities, "decodeHtmlEntities");
+function autoWrapLatex(text) {
+  const lines = text.split("\n");
+  let inCodeBlock = false;
+  return lines.map((line) => {
+    if (line.trim().startsWith("```")) {
+      inCodeBlock = !inCodeBlock;
+      return line;
+    }
+    if (inCodeBlock) return line;
+    const dollarCount = (line.match(/\$/g) || []).length;
+    if (dollarCount >= 2 && dollarCount % 2 === 0 || line.includes("\\[") || line.includes("\\(") || line.includes("\\begin")) {
+      return line.replace(/\$\$(\\ce\{.+?)\$\$\}/g, (_, p1) => `$$${p1}$$`).replace(/\$(\\ce\{.+?)\$\}/g, (_, p1) => `$${p1}$`);
+    }
+    const latexPattern = /(\\[a-zA-Z]+|\^|_[0-9a-zA-Z\{])/;
+    if (!latexPattern.test(line)) return line;
+    let result = "";
+    const chunks = line.split(/([\u4e00-\u9fff\uff00-\uffef\u3000-\u303f]+)/);
+    for (let chunk of chunks) {
+      if (/[\u4e00-\u9fff\uff00-\uffef\u3000-\u303f]/.test(chunk)) {
+        result += chunk;
+      } else {
+        if (chunk.includes("http") || chunk.includes("](")) {
+          result += chunk;
+          continue;
+        }
+        const trimmed = chunk.trim();
+        if (trimmed.length > 0 && latexPattern.test(trimmed)) {
+          const isEnglishSentence = /^[a-zA-Z0-9_\s\.,!?'"-]+$/.test(trimmed) && trimmed.split(/\s+/).length > 3 && !/(\\[a-zA-Z]+|[\+\-\=\/\<\>\*])/.test(trimmed);
+          if (isEnglishSentence) {
+            result += chunk;
+            continue;
+          }
+          const leading = chunk.slice(0, chunk.indexOf(trimmed));
+          const trailing = chunk.slice(chunk.indexOf(trimmed) + trimmed.length);
+          const mathMatch = trimmed.match(/^([\s：:,，。;；]*)(.*?)([\s：:,，。;；]*)$/);
+          const prefix = mathMatch ? mathMatch[1] : "";
+          const coreMath = mathMatch ? mathMatch[2] : trimmed;
+          const suffix = mathMatch ? mathMatch[3] : "";
+          const listMatch = coreMath.match(/^((?:[-*+]|\d+\.)\s+)(.*)/);
+          const isAlreadyWrapped = coreMath.startsWith("$") || coreMath.startsWith("\\[") || coreMath.startsWith("\\(") || coreMath.startsWith("\\begin");
+          if (listMatch) {
+            result += `${leading}${prefix}${listMatch[1]}$${listMatch[2].replace(/^\$+|\$+$/g, "")}$${suffix}${trailing}`;
+          } else if (isAlreadyWrapped) {
+            result += `${leading}${prefix}${coreMath}${suffix}${trailing}`;
+          } else {
+            result += `${leading}${prefix}$${coreMath}$${suffix}${trailing}`;
+          }
+        } else {
+          result += chunk;
+        }
+      }
+    }
+    return result;
+  }).join("\n");
+}
+__name(autoWrapLatex, "autoWrapLatex");
+function containsMarkdown(content) {
+  return /^#{1,6}\s/m.test(content) || /\*\*[^*]+\*\*/.test(content) || /\*[^*]+\*/.test(content) || /`[^`]+`/.test(content) || /```[\s\S]+?```/.test(content) || /^\s*[-*+]\s/m.test(content) || /^\s*\d+\.\s/m.test(content) || /^\s*>\s/m.test(content) || /\[.+?\]\(.+?\)/.test(content);
+}
+__name(containsMarkdown, "containsMarkdown");
 function parseMessage(content) {
-  content = decodeHtmlEntities(content);
   const result = [];
-  const regex = /(\$\$[\s\S]+?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$(?:[^\$\n]|\$(?!\$)|[\s\S])*?\$|\\begin\{[a-zA-Z*]+\}[\s\S]*?\\end\{[a-zA-Z*]+\})/g;
+  const regex = /(\$\$[\s\S]+?\$\$|\\\[[\s\S]*?\\\]|\\\([\s\S]*?\\\)|\$[^\$\n]+?\$|\\begin\{[a-zA-Z*]+\}[\s\S]*?\\end\{[a-zA-Z*]+\})/g;
   let lastIndex = 0;
   let match;
   while ((match = regex.exec(content)) !== null) {
     if (match.index > lastIndex) {
-      const text = content.slice(lastIndex, match.index).trim();
-      if (text) {
-        result.push({ type: "text", content: text });
-      }
+      const text = content.slice(lastIndex, match.index);
+      if (text) result.push({ type: "text", content: text });
     }
     const latex = match[1];
     let isDisplay = false;
-    let formula = latex;
-    if (latex.startsWith("$$") && latex.endsWith("$$")) {
+    let formula = latex.trim();
+    if (formula.startsWith("$$") || formula.startsWith("\\[")) {
       isDisplay = true;
-      formula = latex.slice(2, -2).trim();
-    } else if (latex.startsWith("\\[") && latex.endsWith("\\]")) {
-      isDisplay = true;
-      formula = latex.slice(2, -2).trim();
-    } else if (latex.startsWith("\\(") && latex.endsWith("\\)")) {
-      formula = latex.slice(2, -2).trim();
-    } else if (latex.startsWith("$") && latex.endsWith("$")) {
-      formula = latex.slice(1, -1).trim();
-    } else if (latex.startsWith("\\begin")) {
+    } else if (formula.startsWith("\\begin")) {
       isDisplay = true;
     }
-    result.push({
-      type: "latex",
-      content: formula,
-      display: isDisplay
-    });
+    formula = formula.replace(/^\s*\\\[|\s*\\\]$/g, "").replace(/^\s*\\\(|\s*\\\)$/g, "").replace(/^\s*\$\$|\s*\$\$$/g, "").replace(/^\s*\$|\s*\$$/g, "");
+    formula = formula.replace(/\\\\/g, "卐NEWLINE卍").replace(/(?<!\\)\$/g, "").replace(/卐NEWLINE卍/g, "\\\\").trim();
+    result.push({ type: "latex", content: formula, display: isDisplay });
     lastIndex = match.index + match[0].length;
   }
   if (lastIndex < content.length) {
-    const text = content.slice(lastIndex).trim();
-    if (text) {
-      result.push({ type: "text", content: text });
-    }
+    const text = content.slice(lastIndex);
+    if (text) result.push({ type: "text", content: text });
   }
   return result;
 }
 __name(parseMessage, "parseMessage");
-function generateHtml(parsed, config) {
+function processChineseInLatex(formula) {
+  return formula.replace(/(?<!\\text\{)([\u4e00-\u9fff]+)(?!\})/g, "\\text{$1}").replace(/\\_/g, "_");
+}
+__name(processChineseInLatex, "processChineseInLatex");
+function escapeHtml(text) {
+  return text.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
+}
+__name(escapeHtml, "escapeHtml");
+function generateHtml(content, config) {
   const textColor = config.textColor || "#333333";
   const bgColor = config.backgroundColor || "#ffffff";
   const width = config.width || 800;
-  let html = `<!DOCTYPE html>
+  let decodedContent = decodeHtmlEntities(content);
+  const wrappedContent = autoWrapLatex(decodedContent);
+  const items = parseMessage(wrappedContent);
+  const hasMarkdown = items.some((item) => item.type === "text" && containsMarkdown(item.content));
+  let htmlContent;
+  const katexOptions = {
+    throwOnError: false,
+    // 保持不报错降级
+    strict: false
+  };
+  if (hasMarkdown) {
+    const latexCache = [];
+    let combinedMarkdown = "";
+    let latexIndex = 0;
+    for (const item of items) {
+      if (item.type === "latex") {
+        try {
+          const processedContent = processChineseInLatex(item.content);
+          const latexHtml = import_katex.default.renderToString(processedContent, { ...katexOptions, displayMode: item.display || false });
+          const placeholder = `卐LATEX${latexIndex}卍`;
+          if (item.display) {
+            latexCache.push({ placeholder, html: `<div class="latex-display">${latexHtml}</div>`, isDisplay: true });
+            combinedMarkdown += `
+
+${placeholder}
+
+`;
+          } else {
+            latexCache.push({ placeholder, html: `<span class="latex-inline">${latexHtml}</span>`, isDisplay: false });
+            combinedMarkdown += placeholder;
+          }
+          latexIndex++;
+        } catch (e) {
+          console.warn(`[latex-render] 公式渲染降级: ${item.content}，原因: ${e.message}`);
+          combinedMarkdown += `\`${item.content}\``;
+        }
+      } else {
+        combinedMarkdown += item.content;
+      }
+    }
+    htmlContent = import_marked.marked.parse(combinedMarkdown, { async: false });
+    for (const { placeholder, html, isDisplay } of latexCache) {
+      if (isDisplay) {
+        htmlContent = htmlContent.replace(`<p>${placeholder}</p>`, html);
+      }
+      htmlContent = htmlContent.replace(placeholder, html);
+    }
+  } else {
+    const parts = [];
+    for (const item of items) {
+      if (item.type === "latex") {
+        try {
+          const processedContent = processChineseInLatex(item.content);
+          const latexHtml = import_katex.default.renderToString(processedContent, { ...katexOptions, displayMode: item.display || false });
+          const className = item.display ? "latex-display block" : "latex-inline";
+          parts.push(`<span class="${className}">${latexHtml}</span>`);
+        } catch (e) {
+          console.warn(`[latex-render] 公式渲染降级: ${item.content}，原因: ${e.message}`);
+          parts.push(`<code>${escapeHtml(item.content)}</code>`);
+        }
+      } else {
+        const textHtml = escapeHtml(item.content).replace(/\n/g, "<br>");
+        parts.push(`<span class="text-line">${textHtml}</span>`);
+      }
+    }
+    htmlContent = parts.join("");
+  }
+  return `<!DOCTYPE html>
 <html>
 <head>
   <meta charset="UTF-8">
@@ -107,142 +225,104 @@ function generateHtml(parsed, config) {
     body {
       font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
       font-size: 16px;
-      line-height: 1.8;
+      line-height: 1.5; /* 稍微收紧基础行高 */
       color: ${textColor};
       background-color: ${bgColor};
-      padding: 24px;
+      padding: 24px 30px;
       width: ${width}px;
-      min-height: 100px;
     }
     .content {
       word-wrap: break-word;
-      white-space: pre-wrap;
+      /* ！！！这里必须删掉之前加的 white-space: pre-wrap; ！！！ */
     }
+
+    /* 严格控制基础段落间距 */
+    .content p { margin: 6px 0; }
+    .content p:empty { display: none; }
+
+    /* 🌟 核心修复：干掉 KaTeX 默认自带的巨大上下 Margin (1em) */
+    .katex-display { margin: 0 !important; }
+
+    /* 将公式容器设为 block，并接管精确的间距 */
     .latex-display {
-      margin: 12px 0;
+      display: block;
+      margin: 10px 0; /* 这是真正的块级公式间距 */
       text-align: center;
       overflow-x: auto;
     }
-    .latex-inline {
-      margin: 0 2px;
-    }
-    .text-line {
-      margin: 4px 0;
-    }
+    /* 兼容纯文本分支的 span */
+    .latex-display.block { display: block; }
+
+    .latex-inline { margin: 0 2px; }
+    .text-line { margin: 2px 0; }
+
+    /* 标题和列表排版优化，使其更紧凑 */
+    .content h1, .content h2, .content h3, .content h4 { margin: 16px 0 8px 0; font-weight: 600; }
+    .content ul, .content ol { margin: 6px 0; padding-left: 24px; }
+    .content li { margin: 4px 0; }
+
+    .content blockquote { margin: 8px 0; padding: 8px 16px; border-left: 4px solid #ddd; background-color: #f5f5f5; }
+    .content code { background-color: #f0f0f0; padding: 2px 6px; border-radius: 4px; font-family: "Consolas", monospace; font-size: 0.9em; }
+    .content pre { background-color: #f5f5f5; padding: 12px; border-radius: 6px; overflow-x: auto; margin: 10px 0; }
+    .content pre code { background: none; padding: 0; }
+    .content strong { font-weight: 600; }
+    .content em { font-style: italic; }
+    .content a { color: #0066cc; text-decoration: none; }
   </style>
 </head>
 <body>
-  <div class="content">`;
-  for (const item of parsed) {
-    if (item.type === "text") {
-      const escaped = item.content.replace(/&/g, "&amp;").replace(/</g, "&lt;").replace(/>/g, "&gt;");
-      html += `<span class="text-line">${escaped}</span>`;
-    } else {
-      try {
-        const htmlContent = import_katex.default.renderToString(item.content, {
-          throwOnError: false,
-          displayMode: item.display || false,
-          trust: true,
-          strict: false
-        });
-        const className = item.display ? "latex-display" : "latex-inline";
-        html += `<span class="${className}">${htmlContent}</span>`;
-      } catch (e) {
-        html += `<span class="latex-display"><code>${item.content}</code></span>`;
-      }
-    }
-  }
-  html += `</div></body></html>`;
-  return html;
+  <div class="content">${htmlContent}</div>
+</body>
+</html>`;
 }
 __name(generateHtml, "generateHtml");
-function estimateHeight(parsed) {
-  let charCount = 0;
-  for (const item of parsed) {
-    if (item.type === "text") {
-      charCount += item.content.length;
-    } else {
-      charCount += item.content.length * 1.5;
-    }
-  }
-  const lines = Math.ceil(charCount / 35);
+function estimateHeight(content) {
+  const lines = Math.ceil(content.length / 35);
   return Math.max(100, lines * 24 + 48);
 }
 __name(estimateHeight, "estimateHeight");
 async function renderLatex(ctx, content, config) {
   console.log("[latex-render] 开始渲染...");
-  let parsed;
-  try {
-    parsed = parseMessage(content);
-    console.log("[latex-render] 解析完成，共", parsed.length, "个片段");
-  } catch (error) {
-    console.error("[latex-render] 解析消息失败:", error);
-    throw new Error(`消息解析失败: ${error}`);
-  }
-  if (parsed.length === 0) {
-    throw new Error("No content to render");
-  }
   const width = config.width || 800;
-  const height = estimateHeight(parsed);
+  const height = estimateHeight(content);
   let html;
   try {
-    html = generateHtml(parsed, config);
-    console.log("[latex-render] HTML 生成完成，长度:", html.length);
+    html = generateHtml(content, config);
+    console.log("[latex-render] HTML 生成完成");
   } catch (error) {
-    console.error("[latex-render] HTML 生成失败:", error);
     throw new Error(`HTML 生成失败: ${error}`);
   }
   let page = null;
   try {
     page = await ctx.puppeteer.page();
-    console.log("[latex-render] Puppeteer 页面获取成功");
     await page.setContent(html, {
-      waitUntil: "networkidle2",
+      waitUntil: "networkidle0",
       timeout: 3e4
-      // 30秒超时等待 CSS
     });
-    console.log("[latex-render] HTML 内容设置完成");
-    await new Promise((resolve) => setTimeout(resolve, 500));
-    const actualHeight = await page.evaluate(() => {
-      const body = document.body;
-      return body ? body.scrollHeight : 0;
-    }).catch((e) => {
-      console.warn("[latex-render] 获取高度失败，使用预估高度:", e);
-      return height;
-    });
+    await new Promise((resolve) => setTimeout(resolve, 800));
+    const actualHeight = await page.evaluate(() => document.body ? document.body.scrollHeight : 0);
     const finalHeight = Math.max(actualHeight + 20, height);
-    console.log("[latex-render] 实际高度:", finalHeight);
     const buffer = await page.screenshot({
-      clip: {
-        x: 0,
-        y: 0,
-        width,
-        height: finalHeight
-      },
+      clip: { x: 0, y: 0, width, height: finalHeight },
       type: "png"
     });
-    console.log("[latex-render] 截图完成，buffer 长度:", buffer.length);
     await page.close().catch(() => {
     });
     page = null;
     const base64 = Buffer.from(buffer).toString("base64");
-    const dataUrl = `data:image/png;base64,${base64}`;
-    const url = await ctx.assets.upload(dataUrl, "latex-render.png");
-    console.log("[latex-render] 图片上传完成，URL:", url);
-    return url;
+    return await ctx.assets.upload(`data:image/png;base64,${base64}`, "latex-render.png");
   } catch (error) {
-    console.error("[latex-render] Puppeteer 渲染失败:", error?.message || error);
-    console.error("[latex-render] 错误详情:", error?.stack || "无堆栈信息");
-    if (page) {
-      try {
-        await page.close();
-      } catch (e) {
-      }
-    }
+    if (page) await page.close().catch(() => {
+    });
     throw new Error(`LaTeX 渲染失败: ${error?.message || error}`);
   }
 }
 __name(renderLatex, "renderLatex");
+function containsLatex(content) {
+  const decoded = decodeHtmlEntities(content);
+  return /\$\$/.test(decoded) || /\\begin\{/.test(decoded) || /\\\[[\s\S]*?\\\]/.test(decoded) || /\\\([\s\S]*?\\\)/.test(decoded) || /\\[a-zA-Z]+/.test(decoded) || /\^[^{]/.test(decoded) || /_[^{]/.test(decoded) || /\$[^\$\n]/.test(decoded);
+}
+__name(containsLatex, "containsLatex");
 
 // src/index.ts
 var name = "latex-render";

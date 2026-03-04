@@ -1,11 +1,13 @@
 {
   "name": "koishi-plugin-latex-render",
   "description": "ChatLuna 专用 - 将 AI 返回的 LaTeX 公式渲染为图片",
-  "version": "1.1.0",
+  "version": "1.1.1",
   "main": "lib/index.js",
   "typings": "lib/index.d.ts",
   "files": [
-    "lib"
+    "lib",
+    "index.js",
+    "index.d.ts"
   ],
   "license": "MIT",
   "homepage": "https://github.com/gt4404gb/koishi-plugin-latex-render",
