@@ -4,7 +4,7 @@
 
 ## 简介
 
-**本插件专为 [ChatLuna](https://github.com/ChatLuna/ChatLuna) 设计**，用于将 AI 返回的 LaTeX 公式渲染为图片并发送。
+**本插件专为 [ChatLuna](https://github.com/ChatLunaLab/chatluna) 设计**，用于将 AI 返回的 LaTeX 公式渲染为图片并发送。
 
 当 ChatLuna 的 AI 返回包含 LaTeX 公式的消息时，本插件会自动：
 1. 拦截消息
