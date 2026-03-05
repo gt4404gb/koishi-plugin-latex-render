@@ -64,7 +64,7 @@ function autoWrapLatex(text: string): string {
           const leading = chunk.slice(0, chunk.indexOf(trimmed))
           const trailing = chunk.slice(chunk.indexOf(trimmed) + trimmed.length)
 
-          const mathMatch = trimmed.match(/^([\s：:,，。;；]*)(.*?)([\s：:,，。;；]*)$/)
+          const mathMatch = trimmed.match(/^([\s：:,，。;；\*\#`~]*)(.*?)([\s：:,，。;；\*\#`~]*)$/)
           const prefix = mathMatch ? mathMatch[1] : ''
           const coreMath = mathMatch ? mathMatch[2] : trimmed
           const suffix = mathMatch ? mathMatch[3] : ''
@@ -321,11 +321,15 @@ export async function renderLatex(ctx: Context, content: string, config: Config)
   try {
     page = await (ctx as any).puppeteer.page()
     await page.setContent(html, {
-      waitUntil: 'networkidle0',
+      waitUntil: 'networkidle2', // 修改 1：改成 networkidle2，防止国内 CDN 少量挂起导致超时
       timeout: 30000,
     })
 
-    await new Promise(resolve => setTimeout(resolve, 800))
+    // 核心修复！强制浏览器阻塞，直到 KaTeX 的所有数学符号字体全部加载渲染完毕
+    await page.evaluateHandle('document.fonts.ready')
+
+    // 保底的一小段延迟，确保 DOM 重绘彻底完成
+    await new Promise(resolve => setTimeout(resolve, 500))
 
     const actualHeight = await page.evaluate(() => document.body ? document.body.scrollHeight : 0)
     const finalHeight = Math.max(actualHeight + 20, height)

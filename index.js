@@ -80,7 +80,7 @@ function autoWrapLatex(text) {
           }
           const leading = chunk.slice(0, chunk.indexOf(trimmed));
           const trailing = chunk.slice(chunk.indexOf(trimmed) + trimmed.length);
-          const mathMatch = trimmed.match(/^([\s：:,，。;；]*)(.*?)([\s：:,，。;；]*)$/);
+          const mathMatch = trimmed.match(/^([\s：:,，。;；\*\#`~]*)(.*?)([\s：:,，。;；\*\#`~]*)$/);
           const prefix = mathMatch ? mathMatch[1] : "";
           const coreMath = mathMatch ? mathMatch[2] : trimmed;
           const suffix = mathMatch ? mathMatch[3] : "";
@@ -296,10 +296,12 @@ async function renderLatex(ctx, content, config) {
   try {
     page = await ctx.puppeteer.page();
     await page.setContent(html, {
-      waitUntil: "networkidle0",
+      waitUntil: "networkidle2",
+      // 修改 1：改成 networkidle2，防止国内 CDN 少量挂起导致超时
       timeout: 3e4
     });
-    await new Promise((resolve) => setTimeout(resolve, 800));
+    await page.evaluateHandle("document.fonts.ready");
+    await new Promise((resolve) => setTimeout(resolve, 500));
     const actualHeight = await page.evaluate(() => document.body ? document.body.scrollHeight : 0);
     const finalHeight = Math.max(actualHeight + 20, height);
     const buffer = await page.screenshot({
