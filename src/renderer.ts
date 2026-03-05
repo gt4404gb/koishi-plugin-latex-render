@@ -170,9 +170,10 @@ function generateHtml(content: string, config: Config): string {
   const hasMarkdown = items.some(item => item.type === 'text' && containsMarkdown(item.content))
   let htmlContent: string
 
-  const katexOptions = {
+  const katexOptions: any = {
     throwOnError: false, // 保持不报错降级
-    strict: false
+    strict: false,
+    output: 'html'      // 强制只输出 HTML 排版，绝不生成辅助阅读的 MathML
   }
 
   if (hasMarkdown) {
@@ -242,8 +243,13 @@ function generateHtml(content: string, config: Config): string {
 <html>
 <head>
   <meta charset="UTF-8">
-  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/katex@0.16.9/dist/katex.min.css">
+  <link rel="stylesheet" href="https://cdn.staticfile.net/KaTeX/0.16.9/katex.min.css">
   <style>
+    /* 🌟 彻底干掉辅助阅读的 MathML，防止重影 */
+    .katex-mathml {
+      display: none !important;
+    }
+
     * { margin: 0; padding: 0; box-sizing: border-box; }
     body {
       font-family: "Microsoft YaHei", "PingFang SC", sans-serif;
