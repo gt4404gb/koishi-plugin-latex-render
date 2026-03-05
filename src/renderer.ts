@@ -3,11 +3,17 @@ import katex from 'katex'
 import 'katex/contrib/mhchem' // 引入化学方程式支持
 import { marked } from 'marked'
 import { Context } from 'koishi'
+import * as fs from 'fs'
+import * as path from 'path'
+
+// 运行时读取内置 CSS（消除外部 CDN 依赖）
+const katexCss = fs.readFileSync(path.join(__dirname, 'katex.css'), 'utf-8')
 
 interface Config {
   width?: number
   backgroundColor?: string
   textColor?: string
+  debug?: boolean
 }
 
 function decodeHtmlEntities(text: string): string {
@@ -199,7 +205,7 @@ function generateHtml(content: string, config: Config): string {
           }
           latexIndex++
         } catch (e: any) {
-          console.warn(`[latex-render] 公式渲染降级: ${item.content}，原因: ${e.message}`)
+          console.error(`[latex-render] 公式渲染降级: ${item.content}，原因: ${e.message}`)
           combinedMarkdown += `\`${item.content}\``
         }
       } else {
@@ -227,7 +233,7 @@ function generateHtml(content: string, config: Config): string {
           const className = item.display ? 'latex-display block' : 'latex-inline'
           parts.push(`<span class="${className}">${latexHtml}</span>`)
         } catch (e: any) {
-          console.warn(`[latex-render] 公式渲染降级: ${item.content}，原因: ${e.message}`)
+          console.error(`[latex-render] 公式渲染降级: ${item.content}，原因: ${e.message}`)
           parts.push(`<code>${escapeHtml(item.content)}</code>`)
         }
       } else {
@@ -243,8 +249,9 @@ function generateHtml(content: string, config: Config): string {
 <html>
 <head>
   <meta charset="UTF-8">
-  <link rel="stylesheet" href="https://cdn.staticfile.net/KaTeX/0.16.9/katex.min.css">
   <style>
+    /* KaTeX 内联样式（消除外部依赖） */
+    ${katexCss}
     /* 🌟 彻底干掉辅助阅读的 MathML，防止重影 */
     .katex-mathml {
       display: none !important;
@@ -311,14 +318,15 @@ function estimateHeight(content: string): number {
 }
 
 export async function renderLatex(ctx: Context, content: string, config: Config): Promise<string> {
-  console.log('[latex-render] 开始渲染...')
+  const debug = config.debug || false
+  if (debug) console.log('[latex-render] 开始渲染...')
   const width = config.width || 800
   const height = estimateHeight(content)
 
   let html: string
   try {
     html = generateHtml(content, config)
-    console.log('[latex-render] HTML 生成完成')
+    if (debug) console.log('[latex-render] HTML 生成完成')
   } catch (error) {
     throw new Error(`HTML 生成失败: ${error}`)
   }

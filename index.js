@@ -42,6 +42,9 @@ var import_koishi = require("koishi");
 var import_katex = __toESM(require("katex"));
 var import_mhchem = require("katex/contrib/mhchem");
 var import_marked = require("marked");
+var fs = __toESM(require("fs"));
+var path = __toESM(require("path"));
+var katexCss = fs.readFileSync(path.join(__dirname, "katex.css"), "utf-8");
 function decodeHtmlEntities(text) {
   return text.replace(/&lt;/g, "<").replace(/&gt;/g, ">").replace(/&amp;/g, "&").replace(/&quot;/g, '"').replace(/&#39;/g, "'").replace(/&nbsp;/g, " ");
 }
@@ -183,7 +186,7 @@ ${placeholder}
           }
           latexIndex++;
         } catch (e) {
-          console.warn(`[latex-render] 公式渲染降级: ${item.content}，原因: ${e.message}`);
+          console.error(`[latex-render] 公式渲染降级: ${item.content}，原因: ${e.message}`);
           combinedMarkdown += `\`${item.content}\``;
         }
       } else {
@@ -207,7 +210,7 @@ ${placeholder}
           const className = item.display ? "latex-display block" : "latex-inline";
           parts.push(`<span class="${className}">${latexHtml}</span>`);
         } catch (e) {
-          console.warn(`[latex-render] 公式渲染降级: ${item.content}，原因: ${e.message}`);
+          console.error(`[latex-render] 公式渲染降级: ${item.content}，原因: ${e.message}`);
           parts.push(`<code>${escapeHtml(item.content)}</code>`);
         }
       } else {
@@ -221,8 +224,9 @@ ${placeholder}
 <html>
 <head>
   <meta charset="UTF-8">
-  <link rel="stylesheet" href="https://cdn.staticfile.net/KaTeX/0.16.9/katex.min.css">
   <style>
+    /* KaTeX 内联样式（消除外部依赖） */
+    ${katexCss}
     /* 🌟 彻底干掉辅助阅读的 MathML，防止重影 */
     .katex-mathml {
       display: none !important;
@@ -289,13 +293,14 @@ function estimateHeight(content) {
 }
 __name(estimateHeight, "estimateHeight");
 async function renderLatex(ctx, content, config) {
-  console.log("[latex-render] 开始渲染...");
+  const debug = config.debug || false;
+  if (debug) console.log("[latex-render] 开始渲染...");
   const width = config.width || 800;
   const height = estimateHeight(content);
   let html;
   try {
     html = generateHtml(content, config);
-    console.log("[latex-render] HTML 生成完成");
+    if (debug) console.log("[latex-render] HTML 生成完成");
   } catch (error) {
     throw new Error(`HTML 生成失败: ${error}`);
   }
